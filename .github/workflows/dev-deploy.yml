@@ -84,7 +84,7 @@ jobs:
               restart: always
               command: sh ./entrypoint.sh
               ports:
-                - '127.0.0.1:8000:8000'
+                - '0.0.0.0:8000:8000'
               environment:
                 - DATABASE_URL=${DATABASE_URL}
                 - SECRET_KEY=${SECRET_KEY}
