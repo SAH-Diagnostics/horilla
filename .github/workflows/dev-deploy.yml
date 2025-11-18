@@ -35,11 +35,13 @@ jobs:
       # 2. Get secrets from AWS Secrets Manager
       # Note: Secret is in eu-north-1, so we specify the region explicitly
       - name: Get secrets from AWS Secrets Manager
+        env:
+          AWS_REGION: eu-north-1
+          AWS_DEFAULT_REGION: eu-north-1
         uses: aws-actions/aws-secretsmanager-get-secrets@v2
         with:
           secret-ids: ${{ secrets.AWS_SECRET_NAME }}
           parse-json-secrets: true
-          aws-region: 'eu-north-1'
 
       # 3. Checkout code
       - name: Checkout code
