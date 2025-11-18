@@ -42,6 +42,48 @@ jobs:
         with:
           secret-ids: ${{ secrets.AWS_SECRET_NAME }}
           parse-json-secrets: true
+      
+      # 2b. Alternative: Fetch secret directly (more reliable)
+      # This ensures we get the values regardless of how the action parses them
+      - name: Fetch secrets directly from AWS Secrets Manager
+        env:
+          AWS_REGION: eu-north-1
+        run: |
+          echo "Fetching secret: ${{ secrets.AWS_SECRET_NAME }}"
+          SECRET_JSON=$(aws secretsmanager get-secret-value \
+            --secret-id ${{ secrets.AWS_SECRET_NAME }} \
+            --region eu-north-1 \
+            --query SecretString \
+            --output text)
+          
+          # Parse and export variables (these will override any from the action above)
+          export DATABASE_USER=$(echo "$SECRET_JSON" | jq -r '.DATABASE_USER // empty')
+          export DATABASE_PASSWORD=$(echo "$SECRET_JSON" | jq -r '.DATABASE_PASSWORD // empty')
+          export DATABASE_NAME=$(echo "$SECRET_JSON" | jq -r '.DATABASE_NAME // empty')
+          export SECRET_KEY=$(echo "$SECRET_JSON" | jq -r '.SECRET_KEY // empty')
+          export DEBUG=$(echo "$SECRET_JSON" | jq -r '.DEBUG // "False"')
+          export ALLOWED_HOSTS=$(echo "$SECRET_JSON" | jq -r '.ALLOWED_HOSTS // "*"')
+          export CSRF_TRUSTED_ORIGINS=$(echo "$SECRET_JSON" | jq -r '.CSRF_TRUSTED_ORIGINS // "http://3.9.110.17"')
+          
+          # Debug: Show what we got (redacted)
+          echo "=== Fetched from Secrets Manager ==="
+          echo "DATABASE_USER: ${DATABASE_USER}"
+          echo "DATABASE_PASSWORD: ${DATABASE_PASSWORD:+***SET***}${DATABASE_PASSWORD:-***NOT SET***}"
+          echo "DATABASE_NAME: ${DATABASE_NAME}"
+          echo "SECRET_KEY: ${SECRET_KEY:+***SET***}${SECRET_KEY:-***NOT SET***}"
+          echo "DEBUG: ${DEBUG}"
+          echo "ALLOWED_HOSTS: ${ALLOWED_HOSTS}"
+          echo "CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS}"
+          echo "===================================="
+          
+          # Save to GITHUB_ENV so they're available in subsequent steps
+          echo "DATABASE_USER=${DATABASE_USER}" >> $GITHUB_ENV
+          echo "DATABASE_PASSWORD=${DATABASE_PASSWORD}" >> $GITHUB_ENV
+          echo "DATABASE_NAME=${DATABASE_NAME}" >> $GITHUB_ENV
+          echo "SECRET_KEY=${SECRET_KEY}" >> $GITHUB_ENV
+          echo "DEBUG=${DEBUG}" >> $GITHUB_ENV
+          echo "ALLOWED_HOSTS=${ALLOWED_HOSTS}" >> $GITHUB_ENV
+          echo "CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS}" >> $GITHUB_ENV
 
       # 3. Checkout code
       - name: Checkout code
@@ -62,21 +104,64 @@ jobs:
       # 6. Generate deployment configurations (Docker Compose)
       - name: Generate deployment configurations
         run: |
-          # Note: Environment variables from AWS Secrets Manager will be available here
-          # They may be prefixed (e.g., HORILLA_DATABASE_USER) depending on your secret structure
-          # This script will use whatever variables are set by the AWS Secrets Manager action
+          # Debug: Show all environment variables that start with DATABASE, SECRET, DEBUG, ALLOWED, or CSRF
+          echo "=== Debug: Available environment variables ==="
+          env | grep -E "^(DATABASE|SECRET|DEBUG|ALLOWED|CSRF)" | sed 's/=.*/=***REDACTED***/' || echo "No matching variables found"
+          echo "=============================================="
+          echo ""
           
-          # Set defaults if variables are not set (adjust based on your AWS Secrets Manager structure)
-          DATABASE_USER="${DATABASE_USER:-${HORILLA_DATABASE_USER:-postgres}}"
-          DATABASE_PASSWORD="${DATABASE_PASSWORD:-${HORILLA_DATABASE_PASSWORD}}"
-          DATABASE_NAME="${DATABASE_NAME:-${HORILLA_DATABASE_NAME:-horilla}}"
-          SECRET_KEY="${SECRET_KEY:-${HORILLA_SECRET_KEY}}"
-          DEBUG="${DEBUG:-False}"
-          ALLOWED_HOSTS="${ALLOWED_HOSTS:-*}"
-          CSRF_TRUSTED_ORIGINS="${CSRF_TRUSTED_ORIGINS:-http://3.9.110.17}"
+          # The aws-secretsmanager-get-secrets action with parse-json-secrets: true
+          # creates environment variables from JSON keys. However, it may prefix them
+          # with the secret name. Let's try multiple variations.
           
-          # Construct DATABASE_URL
-          DATABASE_URL="postgres://${DATABASE_USER}:${DATABASE_PASSWORD}@${RDS_ENDPOINT}:5432/${DATABASE_NAME}"
+          # Variables should already be set from the previous step (via GITHUB_ENV)
+          # But we'll also check for variations in case the action set them differently
+          DATABASE_USER="${DATABASE_USER:-${dev_horilla_DATABASE_USER:-${HORILLA_DATABASE_USER:-postgres}}}"
+          DATABASE_PASSWORD="${DATABASE_PASSWORD:-${dev_horilla_DATABASE_PASSWORD:-${HORILLA_DATABASE_PASSWORD}}}"
+          DATABASE_NAME="${DATABASE_NAME:-${dev_horilla_DATABASE_NAME:-${HORILLA_DATABASE_NAME:-horilla}}}"
+          SECRET_KEY="${SECRET_KEY:-${dev_horilla_SECRET_KEY:-${HORILLA_SECRET_KEY}}}"
+          DEBUG="${DEBUG:-${dev_horilla_DEBUG:-${HORILLA_DEBUG:-False}}}"
+          ALLOWED_HOSTS="${ALLOWED_HOSTS:-${dev_horilla_ALLOWED_HOSTS:-${HORILLA_ALLOWED_HOSTS:-*}}}"
+          CSRF_TRUSTED_ORIGINS="${CSRF_TRUSTED_ORIGINS:-${dev_horilla_CSRF_TRUSTED_ORIGINS:-${HORILLA_CSRF_TRUSTED_ORIGINS:-http://3.9.110.17}}}"
+          
+          # Debug: Show what values we got (redacted for security)
+          echo "=== Debug: Resolved values ==="
+          echo "DATABASE_USER: ${DATABASE_USER}"
+          echo "DATABASE_PASSWORD: ${DATABASE_PASSWORD:+***SET***}${DATABASE_PASSWORD:-***NOT SET***}"
+          echo "DATABASE_NAME: ${DATABASE_NAME}"
+          echo "SECRET_KEY: ${SECRET_KEY:+***SET***}${SECRET_KEY:-***NOT SET***}"
+          echo "DEBUG: ${DEBUG}"
+          echo "ALLOWED_HOSTS: ${ALLOWED_HOSTS}"
+          echo "CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS}"
+          echo "=============================================="
+          echo ""
+          
+          # Validate required variables
+          if [ -z "$DATABASE_PASSWORD" ]; then
+            echo "ERROR: DATABASE_PASSWORD is not set in AWS Secrets Manager"
+            echo "Please check:"
+            echo "  1. AWS Secrets Manager secret 'dev/horilla' has 'DATABASE_PASSWORD' key"
+            echo "  2. The secret value is not empty"
+            echo "  3. The IAM role has permissions to read the secret"
+            exit 1
+          fi
+          
+          if [ -z "$SECRET_KEY" ]; then
+            echo "ERROR: SECRET_KEY is not set in AWS Secrets Manager"
+            exit 1
+          fi
+          
+          # URL encode the password to handle special characters (#, @, :, /, etc.)
+          # Using Python for reliable URL encoding
+          ENCODED_PASSWORD=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$DATABASE_PASSWORD', safe=''))")
+          
+          # Construct DATABASE_URL with URL-encoded password
+          DATABASE_URL="postgres://${DATABASE_USER}:${ENCODED_PASSWORD}@${RDS_ENDPOINT}:5432/${DATABASE_NAME}"
+          
+          echo "=== Generated DATABASE_URL (redacted) ==="
+          echo "DATABASE_URL=postgres://${DATABASE_USER}:****@${RDS_ENDPOINT}:5432/${DATABASE_NAME}"
+          echo "=========================================="
+          echo ""
           
           # Generate docker-compose.deploy.yml for production
           cat > docker-compose.deploy.yml << COMPOSEEOF
