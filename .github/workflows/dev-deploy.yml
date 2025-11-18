@@ -21,7 +21,6 @@ jobs:
     env:
       AWS_REGION: 'eu-west-2'
       LIGHTSAIL_STATIC_IP: '3.9.110.17'
-      RDS_ENDPOINT: 'ls-55259936bea462f21e2453f3a91f5f072171ca31.cd6g68iwss4x.eu-west-2.rds.amazonaws.com'
       SSH_USER: 'ec2-user'
 
     steps:
@@ -60,6 +59,7 @@ jobs:
           export DATABASE_USER=$(echo "$SECRET_JSON" | jq -r '.DATABASE_USER // empty')
           export DATABASE_PASSWORD=$(echo "$SECRET_JSON" | jq -r '.DATABASE_PASSWORD // empty')
           export DATABASE_NAME=$(echo "$SECRET_JSON" | jq -r '.DATABASE_NAME // empty')
+          export RDS_ENDPOINT=$(echo "$SECRET_JSON" | jq -r '.RDS_ENDPOINT // empty')
           export SECRET_KEY=$(echo "$SECRET_JSON" | jq -r '.SECRET_KEY // empty')
           export DEBUG=$(echo "$SECRET_JSON" | jq -r '.DEBUG // "False"')
           export ALLOWED_HOSTS=$(echo "$SECRET_JSON" | jq -r '.ALLOWED_HOSTS // "*"')
@@ -70,16 +70,24 @@ jobs:
           echo "DATABASE_USER: ${DATABASE_USER}"
           echo "DATABASE_PASSWORD: ${DATABASE_PASSWORD:+***SET***}${DATABASE_PASSWORD:-***NOT SET***}"
           echo "DATABASE_NAME: ${DATABASE_NAME}"
+          echo "RDS_ENDPOINT: ${RDS_ENDPOINT}"
           echo "SECRET_KEY: ${SECRET_KEY:+***SET***}${SECRET_KEY:-***NOT SET***}"
           echo "DEBUG: ${DEBUG}"
           echo "ALLOWED_HOSTS: ${ALLOWED_HOSTS}"
           echo "CSRF_TRUSTED_ORIGINS: ${CSRF_TRUSTED_ORIGINS}"
           echo "===================================="
           
+          # Validate required variables
+          if [ -z "$RDS_ENDPOINT" ]; then
+            echo "ERROR: RDS_ENDPOINT is not set in AWS Secrets Manager"
+            exit 1
+          fi
+          
           # Save to GITHUB_ENV so they're available in subsequent steps
           echo "DATABASE_USER=${DATABASE_USER}" >> $GITHUB_ENV
           echo "DATABASE_PASSWORD=${DATABASE_PASSWORD}" >> $GITHUB_ENV
           echo "DATABASE_NAME=${DATABASE_NAME}" >> $GITHUB_ENV
+          echo "RDS_ENDPOINT=${RDS_ENDPOINT}" >> $GITHUB_ENV
           echo "SECRET_KEY=${SECRET_KEY}" >> $GITHUB_ENV
           echo "DEBUG=${DEBUG}" >> $GITHUB_ENV
           echo "ALLOWED_HOSTS=${ALLOWED_HOSTS}" >> $GITHUB_ENV
@@ -119,6 +127,7 @@ jobs:
           DATABASE_USER="${DATABASE_USER:-${dev_horilla_DATABASE_USER:-${HORILLA_DATABASE_USER:-postgres}}}"
           DATABASE_PASSWORD="${DATABASE_PASSWORD:-${dev_horilla_DATABASE_PASSWORD:-${HORILLA_DATABASE_PASSWORD}}}"
           DATABASE_NAME="${DATABASE_NAME:-${dev_horilla_DATABASE_NAME:-${HORILLA_DATABASE_NAME:-horilla}}}"
+          RDS_ENDPOINT="${RDS_ENDPOINT:-${dev_horilla_RDS_ENDPOINT:-${HORILLA_RDS_ENDPOINT}}}"
           SECRET_KEY="${SECRET_KEY:-${dev_horilla_SECRET_KEY:-${HORILLA_SECRET_KEY}}}"
           DEBUG="${DEBUG:-${dev_horilla_DEBUG:-${HORILLA_DEBUG:-False}}}"
           ALLOWED_HOSTS="${ALLOWED_HOSTS:-${dev_horilla_ALLOWED_HOSTS:-${HORILLA_ALLOWED_HOSTS:-*}}}"
@@ -129,6 +138,7 @@ jobs:
           echo "DATABASE_USER: ${DATABASE_USER}"
           echo "DATABASE_PASSWORD: ${DATABASE_PASSWORD:+***SET***}${DATABASE_PASSWORD:-***NOT SET***}"
           echo "DATABASE_NAME: ${DATABASE_NAME}"
+          echo "RDS_ENDPOINT: ${RDS_ENDPOINT}"
           echo "SECRET_KEY: ${SECRET_KEY:+***SET***}${SECRET_KEY:-***NOT SET***}"
           echo "DEBUG: ${DEBUG}"
           echo "ALLOWED_HOSTS: ${ALLOWED_HOSTS}"
@@ -143,6 +153,14 @@ jobs:
             echo "  1. AWS Secrets Manager secret 'dev/horilla' has 'DATABASE_PASSWORD' key"
             echo "  2. The secret value is not empty"
             echo "  3. The IAM role has permissions to read the secret"
+            exit 1
+          fi
+          
+          if [ -z "$RDS_ENDPOINT" ]; then
+            echo "ERROR: RDS_ENDPOINT is not set in AWS Secrets Manager"
+            echo "Please check:"
+            echo "  1. AWS Secrets Manager secret 'dev/horilla' has 'RDS_ENDPOINT' key"
+            echo "  2. The secret value is not empty"
             exit 1
           fi
           
